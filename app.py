@@ -6,8 +6,9 @@ import pytz
 
 app = Flask(__name__)
 
-# SQLAlchemy Database Configuration (In-Memory for Vercel Serverless)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
+# Menggunakan File Database Fisik di Folder /tmp Agar Data Lebih Awet
+db_path = os.path.join('/tmp', 'tpa_permanen.db')
+app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
@@ -79,15 +80,12 @@ def portal_orangtua():
     santri_list = Santri.query.all()
     all_dates = list(dates_week.values())
     
-    # Query Data Absensi Minggu Ini
     absensi_records = Absensi.query.filter(Absensi.tanggal.in_(all_dates)).all()
     absen_map = {(a.santri_id, a.tanggal): a.status for a in absensi_records}
 
-    # Query Data Pembayaran SPP
     bayar_records = Pembayaran.query.filter_by(tahun=current_year).all()
     bayar_map = {(b.santri_id, b.bulan): b.status for b in bayar_records}
 
-    # Query Materi Hari Ini & Rekap Pelajaran Minggu Ini
     materi_today = MateriPelajaran.query.filter_by(tanggal=today_db).first()
     materi_minggu_ini = MateriPelajaran.query.filter(MateriPelajaran.tanggal.in_(all_dates)).all()
 
@@ -104,14 +102,12 @@ def portal_orangtua():
     <body class="bg-light">
         <div class="container py-3" style="max-width: 600px;">
             
-            <!-- Ucapan Selamat Datang -->
             <div class="bg-success text-white p-4 rounded-3 shadow-sm mb-3 text-center">
                 <h3 class="fw-bold m-0">🕌 Selamat Datang</h3>
                 <h5 class="fw-normal mb-1">di TPA Baiturrahman</h5>
                 <small class="opacity-75">Pantau Perkembangan Mengaji & Kehadiran Putra-Putri Anda</small>
             </div>
 
-            <!-- Pelajaran Hari Ini -->
             <div class="card border-0 shadow-sm p-3 mb-3 bg-white rounded-3">
                 <small class="text-uppercase fw-bold text-success"><i class="bi bi-book"></i> Pelajaran Hari Ini ({{ today_db }})</small>
                 {% if materi_today %}
@@ -122,7 +118,6 @@ def portal_orangtua():
                 {% endif %}
             </div>
 
-            <!-- REKAPAN PENUTUPAN PEKAN (RANGKUMAN MINGGUAN) -->
             <div class="card border-0 bg-success bg-opacity-10 border-success shadow-sm p-3 mb-3 rounded-3">
                 <div class="d-flex align-items-center mb-2">
                     <i class="bi bi-journal-check text-success fs-3 me-2"></i>
@@ -146,7 +141,6 @@ def portal_orangtua():
                 {% endif %}
             </div>
 
-            <!-- Daftar Santri & Rekap -->
             {% for s in santri_list %}
             <div class="card border-0 shadow-sm p-3 mb-3 bg-white rounded-3">
                 <div class="d-flex justify-content-between align-items-start mb-2">
@@ -157,7 +151,6 @@ def portal_orangtua():
                     <span class="badge bg-success px-3 py-2 fs-6">{{ s.jenis_ngaji }}</span>
                 </div>
                 
-                <!-- Format Capaian & Apresiasi Pekanan -->
                 <div class="bg-light p-3 rounded mb-3 border">
                     <small class="text-muted d-block fw-bold mb-1">Capaian Mengaji Terakhir:</small>
                     {% if s.jenis_ngaji == 'Iqro' %}
@@ -174,7 +167,6 @@ def portal_orangtua():
                     </div>
                 </div>
 
-                <!-- Kehadiran Mingguan -->
                 <h6 class="fw-bold small text-muted mb-2"><i class="bi bi-calendar-week"></i> Kehadiran Minggu Ini:</h6>
                 <div class="d-flex justify-content-between text-center border rounded p-2 bg-white mb-3">
                     {% for h in ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'] %}
@@ -191,7 +183,6 @@ def portal_orangtua():
                     {% endfor %}
                 </div>
 
-                <!-- SPP Bulanan -->
                 <h6 class="fw-bold small text-muted mb-2"><i class="bi bi-cash-coin"></i> Status SPP Bulanan ({{ current_year }}):</h6>
                 <div class="row g-1 text-center">
                     {% for b in bulan_list %}
@@ -206,10 +197,9 @@ def portal_orangtua():
                 </div>
             </div>
             {% else %}
-            <div class="card border-0 p-4 text-center text-muted rounded-3">Belum ada data santri terdaftar.</div>
+            <div class="card border-0 p-4 text-center text-muted rounded-3">Belum ada data santri terdaftar. Silakan tambahkan di Mode Admin.</div>
             {% endfor %}
 
-            <!-- Section Warung & Amal Yayasan -->
             <div class="card border-0 bg-warning bg-opacity-10 border-warning shadow-sm p-3 mb-4 rounded-3 text-center">
                 <div class="mb-2">
                     <i class="bi bi-shop-window text-warning-emphasis fs-1"></i>
@@ -267,7 +257,6 @@ def admin_dashboard():
         </nav>
 
         <div class="container my-4">
-            <!-- Form Input Pelajaran & Materi Hari Ini -->
             <div class="card border-0 shadow-sm p-3 mb-4 bg-white">
                 <h5 class="fw-bold text-success mb-2"><i class="bi bi-journal-bookmark-fill"></i> Kelola Pelajaran & Materi Hari Ini</h5>
                 <form action="/api/simpan-materi" method="POST" class="row g-2">
@@ -290,7 +279,6 @@ def admin_dashboard():
             </div>
 
             <div class="row g-4">
-                <!-- Form Tambah Santri -->
                 <div class="col-lg-4">
                     <div class="card border-0 shadow-sm p-3">
                         <h5 class="fw-bold text-success mb-3"><i class="bi bi-person-plus-fill"></i> Tambah / Edit Santri</h5>
@@ -323,9 +311,7 @@ def admin_dashboard():
                     </div>
                 </div>
 
-                <!-- Presensi & SPP Bulanan -->
                 <div class="col-lg-8">
-                    <!-- Tabel Presensi Mingguan -->
                     <div class="card border-0 shadow-sm p-3 mb-4">
                         <h5 class="fw-bold text-success mb-3"><i class="bi bi-calendar-check"></i> Presensi Mingguan (Senin - Sabtu)</h5>
                         <div class="table-responsive">
@@ -384,7 +370,6 @@ def admin_dashboard():
                         </div>
                     </div>
 
-                    <!-- Tabel Pembayaran SPP Bulanan -->
                     <div class="card border-0 shadow-sm p-3">
                         <h5 class="fw-bold text-success mb-3"><i class="bi bi-cash-coin"></i> Kelola SPP Bulanan ({{ current_year }})</h5>
                         <div class="table-responsive">
