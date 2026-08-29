@@ -1,14 +1,13 @@
 import os
 from flask import Flask, render_template_string, request, jsonify, redirect, url_for
 from flask_sqlalchemy import SQLAlchemy
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 
 app = Flask(__name__)
 
-# Konfigurasi database SQLite di folder /tmp agar kompatibel dengan Vercel
-db_path = os.path.join('/tmp', 'tpa_v2.db')
-app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
+# Konfigurasi Database In-Memory untuk Serverless Vercel
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
@@ -19,66 +18,57 @@ db = SQLAlchemy(app)
 class Santri(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     nama = db.Column(db.String(100), nullable=False)
-    kategori = db.Column(db.String(50), nullable=False)
+    umur = db.Column(db.Integer, nullable=False)
+    jenis_ngaji = db.Column(db.String(20), nullable=False) # 'Iqro' atau 'Al-Qur\'an'
+    capaian = db.Column(db.String(100), nullable=False) # 'Jilid 3' atau 'Surah Al-Baqarah'
+    halaman = db.Column(db.String(50), nullable=False)  # 'Halaman 15' atau 'Ayat 25'
     absensi = db.relationship('Absensi', backref='santri', lazy=True, cascade="all, delete-orphan")
 
 class Absensi(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     santri_id = db.Column(db.Integer, db.ForeignKey('santri.id'), nullable=False)
-    tanggal = db.Column(db.String(20), nullable=False)
-    status = db.Column(db.String(20), nullable=False)
+    tanggal = db.Column(db.String(20), nullable=False) # YYYY-MM-DD
+    status = db.Column(db.String(20), nullable=False) # 'Hadir' / 'Alfa'
 
 with app.app_context():
     db.create_all()
 
 # --------------------------------------------------
-# HELPER TANGGAL & JADWAL MATERI
+# HELPER TANGGAL MINGGUAN (SENIN - SABTU)
 # --------------------------------------------------
-JADWAL_MATERI = {
-    'Senin': 'Adab & Akhlak Sehari-hari (Makan, Minum, Orang Tua)',
-    'Selasa': 'Kisah Nabi & Sahabat (Storytelling Islami)',
-    'Rabu': 'Doa Harian & Zikir Pendek',
-    'Kamis': 'Praktik Ibadah (Wudhu & Sholat)',
-    'Jumat': 'Mengenal Ciptaan Allah & Tadabbur Alam',
-    'Sabtu': 'Seni Islami, Kuis Pekanan & Hafalan',
-    'Minggu': 'Libur / Pengajian Bebas'
-}
+HARI_LIST = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu']
 
-def get_waktu_sekarang():
-    tz_wib = pytz.timezone('Asia/Jakarta')
-    now = datetime.now(tz_wib)
+def get_minggu_sekarang():
+    try:
+        tz = pytz.timezone('Asia/Jakarta')
+        now = datetime.now(tz)
+    except:
+        now = datetime.now()
     
-    hari_map = {
-        'Monday': 'Senin', 'Tuesday': 'Selasa', 'Wednesday': 'Rabu',
-        'Thursday': 'Kamis', 'Friday': 'Jumat', 'Saturday': 'Sabtu', 'Sunday': 'Minggu'
-    }
-    bulan_map = {
-        1: 'Januari', 2: 'Februari', 3: 'Maret', 4: 'April', 5: 'Mei', 6: 'Juni',
-        7: 'Juli', 8: 'Agustus', 9: 'September', 10: 'Oktober', 11: 'November', 12: 'Desember'
-    }
+    # Cari hari Senin dari minggu berjalan
+    start_of_week = now - timedelta(days=now.weekday())
     
-    hari_indo = hari_map.get(now.strftime('%A'), 'Senin')
-    tanggal_indo = f"{now.day} {bulan_map[now.month]} {now.year}"
-    tanggal_db = now.strftime('%Y-%m-%d')
-    materi = JADWAL_MATERI.get(hari_indo, '-')
-    
-    return hari_indo, tanggal_indo, tanggal_db, materi
+    dates_of_week = {}
+    for idx, hari in enumerate(HARI_LIST):
+        dt = start_of_week + timedelta(days=idx)
+        dates_of_week[hari] = dt.strftime('%Y-%m-%d')
+        
+    return dates_of_week, now.strftime('%Y-%m-%d')
 
 # --------------------------------------------------
 # ROUTE ADMIN / DASHBOARD
 # --------------------------------------------------
 @app.route('/')
 def admin_dashboard():
-    hari_indo, tanggal_indo, tanggal_db, materi = get_waktu_sekarang()
+    dates_week, today_db = get_minggu_sekarang()
     santri_list = Santri.query.all()
     
-    # Hitung Statistik Absensi Hari Ini
-    absensi_today = Absensi.query.filter_by(tanggal=tanggal_db).all()
-    status_dict = {a.santri_id: a.status for a in absensi_today}
+    # Ambil seluruh data absensi minggu ini
+    all_dates = list(dates_week.values())
+    absensi_records = Absensi.query.filter(Absensi.tanggal.in_(all_dates)).all()
     
-    hadir = sum(1 for s in status_dict.values() if s == "Hadir")
-    izin = sum(1 for s in status_dict.values() if s == "Izin")
-    alfa = sum(1 for s in status_dict.values() if s == "Alfa")
+    # Mapping absensi: (santri_id, tgl) -> status
+    absen_map = {(a.santri_id, a.tanggal): a.status for a in absensi_records}
 
     return render_template_string('''
     <!DOCTYPE html>
@@ -94,102 +84,94 @@ def admin_dashboard():
         <nav class="navbar navbar-expand-lg navbar-dark bg-success shadow-sm">
             <div class="container">
                 <a class="navbar-brand fw-bold" href="/">🕌 Admin TPA Baiturrahman</a>
-                <a href="/orangtua" class="btn btn-light btn-sm fw-bold text-success"><i class="bi bi-eye"></i> Mode Orang Tua</a>
+                <a href="/orangtua" class="btn btn-light btn-sm fw-bold text-success"><i class="bi bi-person-heart"></i> Portal Wali Santri</a>
             </div>
         </nav>
 
         <div class="container my-4">
-            <div class="card border-0 bg-success text-white shadow-sm p-3 mb-4 rounded-3">
-                <div class="d-flex justify-content-between align-items-center flex-wrap">
-                    <div>
-                        <span class="badge bg-warning text-dark mb-1">📅 {{ hari_indo }}, {{ tanggal_indo }}</span>
-                        <h4 class="fw-bold m-0">Materi Hari Ini: {{ materi }}</h4>
-                    </div>
-                </div>
-            </div>
-
-            <div class="row g-3 mb-4 text-center">
-                <div class="col-4">
-                    <div class="card bg-success text-white border-0 shadow-sm p-2">
-                        <small>Hadir</small>
-                        <h3 class="fw-bold m-0" id="stat-hadir">{{ hadir }}</h3>
-                    </div>
-                </div>
-                <div class="col-4">
-                    <div class="card bg-warning text-dark border-0 shadow-sm p-2">
-                        <small>Izin</small>
-                        <h3 class="fw-bold m-0" id="stat-izin">{{ izin }}</h3>
-                    </div>
-                </div>
-                <div class="col-4">
-                    <div class="card bg-danger text-white border-0 shadow-sm p-2">
-                        <small>Alfa</small>
-                        <h3 class="fw-bold m-0" id="stat-alfa">{{ alfa }}</h3>
-                    </div>
-                </div>
-            </div>
-
             <div class="row g-4">
-                <div class="col-md-4">
+                <!-- Form Tambah Data Santri -->
+                <div class="col-lg-4">
                     <div class="card border-0 shadow-sm p-3">
-                        <h5 class="fw-bold text-success mb-3"><i class="bi bi-person-plus-fill"></i> Tambah Santri Baru</h5>
+                        <h5 class="fw-bold text-success mb-3"><i class="bi bi-person-plus-fill"></i> Tambah Data Santri</h5>
                         <form action="/api/tambah-santri" method="POST">
                             <div class="mb-2">
                                 <label class="form-label small fw-bold">Nama Santri</label>
-                                <input type="text" name="nama" class="form-control" placeholder="Nama lengkap" required>
+                                <input type="text" name="nama" class="form-control form-control-sm" placeholder="Nama lengkap" required>
                             </div>
-                            <div class="mb-3">
-                                <label class="form-label small fw-bold">Kelompok / Jilid</label>
-                                <select name="kategori" class="form-select" required>
-                                    <option value="Iqro 1">Iqro 1</option>
-                                    <option value="Iqro 2">Iqro 2</option>
-                                    <option value="Iqro 3">Iqro 3</option>
-                                    <option value="Iqro 4">Iqro 4</option>
-                                    <option value="Iqro 5">Iqro 5</option>
-                                    <option value="Iqro 6">Iqro 6</option>
+                            <div class="mb-2">
+                                <label class="form-label small fw-bold">Umur (Tahun)</label>
+                                <input type="number" name="umur" class="form-control form-control-sm" placeholder="Contoh: 7" required>
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label small fw-bold">Tingkat Mengaji</label>
+                                <select name="jenis_ngaji" id="jenis_ngaji" class="form-select form-select-sm" onchange="updateFormTingkat()" required>
+                                    <option value="Iqro">Iqro</option>
                                     <option value="Al-Qur'an">Al-Qur'an</option>
                                 </select>
                             </div>
-                            <button type="submit" class="btn btn-success w-100 fw-bold">Simpan Santri</button>
+                            <div class="mb-2" id="box-capaian">
+                                <label class="form-label small fw-bold" id="lbl-capaian">Jilid Iqro</label>
+                                <input type="text" name="capaian" id="capaian" class="form-control form-control-sm" placeholder="Contoh: Jilid 3" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label small fw-bold" id="lbl-halaman">Halaman</label>
+                                <input type="text" name="halaman" class="form-control form-control-sm" placeholder="Contoh: Halaman 12" required>
+                            </div>
+                            <button type="submit" class="btn btn-success w-100 fw-bold btn-sm">Simpan Data Santri</button>
                         </form>
                     </div>
                 </div>
 
-                <div class="col-md-8">
+                <!-- Tabel Data Santri & Centang Absensi Mingguan -->
+                <div class="col-lg-8">
                     <div class="card border-0 shadow-sm p-3">
-                        <h5 class="fw-bold text-success mb-3"><i class="bi bi-check2-square"></i> Presensi Santri</h5>
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h5 class="fw-bold text-success m-0"><i class="bi bi-calendar-check"></i> Presensi Mingguan (Senin - Sabtu)</h5>
+                        </div>
+                        
                         <div class="table-responsive">
-                            <table class="table table-hover align-middle">
-                                <thead class="table-light">
+                            <table class="table table-bordered align-middle text-center small">
+                                <thead class="table-success">
                                     <tr>
-                                        <th>Nama</th>
-                                        <th>Status Absen</th>
-                                        <th class="text-end">Aksi</th>
+                                        <th class="text-start" style="min-width: 160px;">Nama Santri</th>
+                                        <th>Capaian Mengaji</th>
+                                        {% for h in ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'] %}
+                                        <th>{{ h }}</th>
+                                        {% endfor %}
+                                        <th>Aksi</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {% for s in santri_list %}
                                     <tr id="row-santri-{{ s.id }}">
-                                        <td>
-                                            <div class="fw-bold">{{ s.nama }}</div>
-                                            <small class="text-muted">{{ s.kategori }}</small>
+                                        <td class="text-start">
+                                            <div class="fw-bold text-dark">{{ s.nama }}</div>
+                                            <small class="text-muted">{{ s.umur }} Tahun</small>
                                         </td>
                                         <td>
-                                            {% set st = status_dict.get(s.id, 'Belum') %}
-                                            <span id="badge-{{ s.id }}" class="badge {{ 'bg-success' if st=='Hadir' else ('bg-warning text-dark' if st=='Izin' else ('bg-danger' if st=='Alfa' else 'bg-secondary')) }}">
-                                                {{ st }}
-                                            </span>
+                                            <span class="badge bg-info text-dark">{{ s.jenis_ngaji }}</span>
+                                            <div><small class="fw-bold">{{ s.capaian }}</small></div>
+                                            <small class="text-muted">{{ s.halaman }}</small>
                                         </td>
-                                        <td class="text-end">
-                                            <button onclick="absenInstan({{ s.id }}, 'Hadir')" class="btn btn-sm btn-outline-success">H</button>
-                                            <button onclick="absenInstan({{ s.id }}, 'Izin')" class="btn btn-sm btn-outline-warning">I</button>
-                                            <button onclick="absenInstan({{ s.id }}, 'Alfa')" class="btn btn-sm btn-outline-danger">A</button>
-                                            <button onclick="hapusSantri({{ s.id }})" class="btn btn-sm btn-light text-danger ms-1" title="Hapus"><i class="bi bi-trash"></i></button>
+
+                                        {% for h in ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'] %}
+                                        {% set tgl = dates_week[h] %}
+                                        {% set is_checked = (absen_map.get((s.id, tgl)) == 'Hadir') %}
+                                        <td class="align-middle">
+                                            <input type="checkbox" class="form-check-input p-2" 
+                                                   onchange="toggleAbsen({{ s.id }}, '{{ tgl }}', this.checked)"
+                                                   {{ 'checked' if is_checked else '' }}>
+                                        </td>
+                                        {% endfor %}
+
+                                        <td>
+                                            <button onclick="hapusSantri({{ s.id }})" class="btn btn-sm btn-light text-danger" title="Hapus"><i class="bi bi-trash"></i></button>
                                         </td>
                                     </tr>
                                     {% else %}
                                     <tr>
-                                        <td colspan="3" class="text-center text-muted py-4">Belum ada data santri. Silakan tambahkan di form sebelah kiri.</td>
+                                        <td colspan="9" class="text-center text-muted py-4">Belum ada data santri. Silakan isi form di sebelah kiri.</td>
                                     </tr>
                                     {% endfor %}
                                 </tbody>
@@ -201,26 +183,30 @@ def admin_dashboard():
         </div>
 
         <script>
-            async function absenInstan(id, status) {
-                const res = await fetch('/api/absen', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({santri_id: id, status: status})
-                });
-                const data = await res.json();
-                if(data.success) {
-                    const badge = document.getElementById(`badge-${id}`);
-                    badge.innerText = status;
-                    badge.className = 'badge ' + (status==='Hadir' ? 'bg-success' : (status==='Izin' ? 'bg-warning text-dark' : 'bg-danger'));
-                    
-                    document.getElementById('stat-hadir').innerText = data.stats.hadir;
-                    document.getElementById('stat-izin').innerText = data.stats.izin;
-                    document.getElementById('stat-alfa').innerText = data.stats.alfa;
+            function updateFormTingkat() {
+                const jenis = document.getElementById('jenis_ngaji').value;
+                if(jenis === 'Iqro') {
+                    document.getElementById('lbl-capaian').innerText = 'Jilid Iqro';
+                    document.getElementById('capaian').placeholder = 'Contoh: Jilid 3';
+                    document.getElementById('lbl-halaman').innerText = 'Halaman';
+                } else {
+                    document.getElementById('lbl-capaian').innerText = 'Nama Surah';
+                    document.getElementById('capaian').placeholder = 'Contoh: Surah Al-Baqarah';
+                    document.getElementById('lbl-halaman').innerText = 'Ayat / Halaman';
                 }
             }
 
+            async function toggleAbsen(santriId, tanggal, isChecked) {
+                const status = isChecked ? 'Hadir' : 'Alfa';
+                await fetch('/api/absen', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({santri_id: santriId, tanggal: tanggal, status: status})
+                });
+            }
+
             async function hapusSantri(id) {
-                if(confirm("Yakin ingin menghapus santri ini?")) {
+                if(confirm("Hapus data santri ini?")) {
                     const res = await fetch(`/api/hapus-santri/${id}`, {method: 'DELETE'});
                     const data = await res.json();
                     if(data.success) {
@@ -231,17 +217,19 @@ def admin_dashboard():
         </script>
     </body>
     </html>
-    ''', santri_list=santri_list, status_dict=status_dict, hari_indo=hari_indo, tanggal_indo=tanggal_indo, materi=materi, hadir=hadir, izin=izin, alfa=alfa)
+    ''', santri_list=santri_list, dates_week=dates_week, absen_map=absen_map)
 
 # --------------------------------------------------
-# ROUTE HALAMAN ORANG TUA (READ-ONLY)
+# ROUTE PORTAL WALI SANTRI
 # --------------------------------------------------
 @app.route('/orangtua')
 def portal_orangtua():
-    hari_indo, tanggal_indo, tanggal_db, materi = get_waktu_sekarang()
+    dates_week, _ = get_minggu_sekarang()
     santri_list = Santri.query.all()
-    absensi_today = Absensi.query.filter_by(tanggal=tanggal_db).all()
-    status_dict = {a.santri_id: a.status for a in absensi_today}
+    
+    all_dates = list(dates_week.values())
+    absensi_records = Absensi.query.filter(Absensi.tanggal.in_(all_dates)).all()
+    absen_map = {(a.santri_id, a.tanggal): a.status for a in absensi_records}
 
     return render_template_string('''
     <!DOCTYPE html>
@@ -249,62 +237,74 @@ def portal_orangtua():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Portal Wali Murid - TPA Baiturrahman</title>
+        <title>Portal Wali Santri - TPA Baiturrahman</title>
         <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
         <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
     </head>
     <body class="bg-light">
-        <div class="container py-3" style="max-width: 500px;">
+        <div class="container py-3" style="max-width: 600px;">
             <div class="text-center bg-success text-white p-3 rounded-3 shadow-sm mb-3">
                 <h4 class="fw-bold m-0">🕌 TPA BAITURRAHMAN</h4>
-                <small>Informasi Pengajian & Kehadiran Santri</small>
+                <small>Informasi Progres Mengaji & Kehadiran Santri</small>
             </div>
 
+            {% for s in santri_list %}
             <div class="card border-0 shadow-sm p-3 mb-3 bg-white">
-                <small class="text-uppercase fw-bold text-success">Jadwal Hari Ini</small>
-                <h5 class="fw-bold text-dark m-0">{{ hari_indo }}, {{ tanggal_indo }}</h5>
-                <hr class="my-2">
-                <small class="text-muted">Materi Pelajaran:</small>
-                <div class="fw-bold text-dark">{{ materi }}</div>
-            </div>
-
-            <div class="card border-0 shadow-sm p-3 bg-white">
-                <h6 class="fw-bold text-success mb-3"><i class="bi bi-card-checklist"></i> Status Kehadiran Santri</h6>
-                <div class="list-group list-group-flush">
-                    {% for s in santri_list %}
-                    <div class="list-group-item d-flex justify-content-between align-items-center px-0">
-                        <div>
-                            <div class="fw-bold">{{ s.nama }}</div>
-                            <small class="text-muted">{{ s.kategori }}</small>
-                        </div>
-                        {% set st = status_dict.get(s.id, 'Belum Absen') %}
-                        <span class="badge {{ 'bg-success' if st=='Hadir' else ('bg-warning text-dark' if st=='Izin' else ('bg-danger' if st=='Alfa' else 'bg-secondary')) }} px-3 py-2">
-                            {{ st }}
-                        </span>
+                <div class="d-flex justify-content-between align-items-start mb-2">
+                    <div>
+                        <h5 class="fw-bold text-success m-0">{{ s.nama }}</h5>
+                        <small class="text-muted">Umur: {{ s.umur }} Tahun</small>
                     </div>
-                    {% else %}
-                    <div class="text-center text-muted py-3">Belum ada data santri yang terdaftar.</div>
+                    <span class="badge bg-success px-3 py-2">{{ s.jenis_ngaji }}</span>
+                </div>
+                
+                <div class="bg-light p-2 rounded mb-3">
+                    <small class="text-muted d-block">Capaian Terakhir:</small>
+                    <span class="fw-bold text-dark">{{ s.capaian }}</span> — <small class="text-dark">{{ s.halaman }}</small>
+                </div>
+
+                <h6 class="fw-bold small text-muted mb-2"><i class="bi bi-calendar-week"></i> Kehadiran Minggu Ini:</h6>
+                <div class="d-flex justify-content-between text-center border rounded p-2 bg-white">
+                    {% for h in ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'] %}
+                    {% set tgl = dates_week[h] %}
+                    {% set is_hadir = (absen_map.get((s.id, tgl)) == 'Hadir') %}
+                    <div>
+                        <small class="d-block text-muted" style="font-size: 11px;">{{ h[:3] }}</small>
+                        {% if is_hadir %}
+                            <i class="bi bi-check-circle-fill text-success fs-5"></i>
+                        {% else %}
+                            <i class="bi bi-dash-circle text-secondary fs-5"></i>
+                        {% endif %}
+                    </div>
                     {% endfor %}
                 </div>
             </div>
+            {% else %}
+            <div class="card border-0 p-4 text-center text-muted">Belum ada data santri terdaftar.</div>
+            {% endfor %}
 
-            <div class="text-center mt-4">
-                <a href="/" class="text-muted small text-decoration-none">🔑 Masuk Halaman Admin</a>
+            <div class="text-center mt-3">
+                <a href="/" class="text-muted small text-decoration-none">🔑 Masuk Panel Pengajar/Admin</a>
             </div>
         </div>
     </body>
     </html>
-    ''', santri_list=santri_list, status_dict=status_dict, hari_indo=hari_indo, tanggal_indo=tanggal_indo, materi=materi)
+    ''', santri_list=santri_list, dates_week=dates_week, absen_map=absen_map)
 
 # --------------------------------------------------
-# API ENDPOINTS (AJAX)
+# API ENDPOINTS
 # --------------------------------------------------
 @app.route('/api/tambah-santri', methods=['POST'])
 def api_tambah_santri():
     nama = request.form.get('nama')
-    kategori = request.form.get('kategori')
-    if nama and kategori:
-        db.session.add(Santri(nama=nama, kategori=kategori))
+    umur = request.form.get('umur')
+    jenis_ngaji = request.form.get('jenis_ngaji')
+    capaian = request.form.get('capaian')
+    halaman = request.form.get('halaman')
+    
+    if nama and umur:
+        s = Santri(nama=nama, umur=int(umur), jenis_ngaji=jenis_ngaji, capaian=capaian, halaman=halaman)
+        db.session.add(s)
         db.session.commit()
     return redirect(url_for('admin_dashboard'))
 
@@ -312,25 +312,17 @@ def api_tambah_santri():
 def api_absen():
     data = request.json
     santri_id = data.get('santri_id')
+    tanggal = data.get('tanggal')
     status = data.get('status')
     
-    _, _, tanggal_db, _ = get_waktu_sekarang()
-    
-    existing = Absensi.query.filter_by(santri_id=santri_id, tanggal=tanggal_db).first()
+    existing = Absensi.query.filter_by(santri_id=santri_id, tanggal=tanggal).first()
     if existing:
         existing.status = status
     else:
-        db.session.add(Absensi(santri_id=santri_id, tanggal=tanggal_db, status=status))
+        db.session.add(Absensi(santri_id=santri_id, tanggal=tanggal, status=status))
     db.session.commit()
 
-    # Stat terbaru
-    absensi_today = Absensi.query.filter_by(tanggal=tanggal_db).all()
-    stats = {
-        'hadir': sum(1 for a in absensi_today if a.status == "Hadir"),
-        'izin': sum(1 for a in absensi_today if a.status == "Izin"),
-        'alfa': sum(1 for a in absensi_today if a.status == "Alfa")
-    }
-    return jsonify({'success': True, 'stats': stats})
+    return jsonify({'success': True})
 
 @app.route('/api/hapus-santri/<int:santri_id>', methods=['DELETE'])
 def api_hapus_santri(santri_id):
