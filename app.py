@@ -23,7 +23,7 @@ class Santri(db.Model):
     jenis_ngaji = db.Column(db.String(20), nullable=False)
     capaian = db.Column(db.String(100), nullable=False)
     halaman = db.Column(db.String(50), nullable=False)
-    poin_kebaikan = db.Column(db.Integer, default=0, nullable=False) # FITUR BARU: POIN KEBAIKAN
+    poin_kebaikan = db.Column(db.Integer, default=0, nullable=False)
     absensi = db.relationship('Absensi', backref='santri', lazy=True, cascade="all, delete-orphan")
     pembayaran = db.relationship('Pembayaran', backref='santri', lazy=True, cascade="all, delete-orphan")
 
@@ -47,8 +47,21 @@ class MateriPelajaran(db.Model):
     pelajaran = db.Column(db.String(100), nullable=False)
     materi = db.Column(db.Text, nullable=False)
 
+# OTOMATIS TAMBAHKAN DATA SANTRI AWAL
+def seed_initial_santri():
+    if Santri.query.count() == 0:
+        santri_awal = [
+            Santri(nama="Mazaya Hibrizi Satira Karba", umur=7, jenis_ngaji="Iqro", capaian="1", halaman="1", poin_kebaikan=0),
+            Santri(nama="Alfarisqi", umur=6, jenis_ngaji="Iqro", capaian="1", halaman="1", poin_kebaikan=0),
+            Santri(nama="Azkiya Azzahra", umur=3, jenis_ngaji="Iqro", capaian="1", halaman="1", poin_kebaikan=0),
+            Santri(nama="Grasella Beryl Anindia", umur=10, jenis_ngaji="Iqro", capaian="1", halaman="1", poin_kebaikan=0),
+        ]
+        db.session.bulk_save_objects(santri_awal)
+        db.session.commit()
+
 with app.app_context():
     db.create_all()
+    seed_initial_santri()
 
 # HELPER TANGGAL & SPP MULAI JULI
 HARI_LIST = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu']
@@ -387,7 +400,7 @@ def admin_dashboard():
                 </div>
 
                 <div class="col-lg-8">
-                    <!-- KELOLA POIN KEBAIKAN (FITUR BARU) -->
+                    <!-- KELOLA POIN KEBAIKAN -->
                     <div class="card border-0 shadow-sm p-3 mb-4 bg-warning bg-opacity-10 border-warning">
                         <h5 class="fw-bold text-warning-emphasis mb-1"><i class="bi bi-star-fill text-warning"></i> Kelola Poin Kebaikan & Akhlak Santri</h5>
                         <small class="text-muted mb-3 d-block">Tambahkan poin untuk kebaikan seperti membuang sampah, tepat waktu, membantu ustadz, dll.</small>
