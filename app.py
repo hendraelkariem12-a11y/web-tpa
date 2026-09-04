@@ -23,6 +23,7 @@ class Santri(db.Model):
     jenis_ngaji = db.Column(db.String(20), nullable=False)
     capaian = db.Column(db.String(100), nullable=False)
     halaman = db.Column(db.String(50), nullable=False)
+    poin_kebaikan = db.Column(db.Integer, default=0, nullable=False) # FITUR BARU: POIN KEBAIKAN
     absensi = db.relationship('Absensi', backref='santri', lazy=True, cascade="all, delete-orphan")
     pembayaran = db.relationship('Pembayaran', backref='santri', lazy=True, cascade="all, delete-orphan")
 
@@ -166,6 +167,19 @@ def portal_orangtua():
                         <small class="text-muted">Umur: {{ s.umur }} Tahun</small>
                     </div>
                     <span class="badge bg-success px-3 py-2 fs-6">{{ s.jenis_ngaji }}</span>
+                </div>
+
+                <!-- POIN KEBAIKAN BADGE -->
+                <div class="bg-warning bg-opacity-10 border border-warning rounded p-2 mb-3 d-flex align-items-center justify-content-between">
+                    <div>
+                        <span class="fw-bold text-warning-emphasis d-block" style="font-size: 13px;">
+                            <i class="bi bi-star-fill text-warning me-1"></i> Poin Kebaikan & Akhlak
+                        </span>
+                        <small class="text-muted" style="font-size: 11px;">(Buang sampah, tepat waktu, tolong menolong, dll)</small>
+                    </div>
+                    <span class="badge bg-warning text-dark fs-6 px-3 py-2 rounded-pill fw-bold">
+                        ⭐ {{ s.poin_kebaikan }} Poin
+                    </span>
                 </div>
                 
                 <div class="bg-light p-3 rounded mb-3 border">
@@ -341,7 +355,7 @@ def admin_dashboard():
 
             <div class="row g-4">
                 <div class="col-lg-4">
-                    <div class="card border-0 shadow-sm p-3">
+                    <div class="card border-0 shadow-sm p-3 mb-4">
                         <h5 class="fw-bold text-success mb-3"><i class="bi bi-person-plus-fill"></i> Tambah / Edit Santri</h5>
                         <form action="/api/tambah-santri" method="POST">
                             <div class="mb-2">
@@ -373,6 +387,44 @@ def admin_dashboard():
                 </div>
 
                 <div class="col-lg-8">
+                    <!-- KELOLA POIN KEBAIKAN (FITUR BARU) -->
+                    <div class="card border-0 shadow-sm p-3 mb-4 bg-warning bg-opacity-10 border-warning">
+                        <h5 class="fw-bold text-warning-emphasis mb-1"><i class="bi bi-star-fill text-warning"></i> Kelola Poin Kebaikan & Akhlak Santri</h5>
+                        <small class="text-muted mb-3 d-block">Tambahkan poin untuk kebaikan seperti membuang sampah, tepat waktu, membantu ustadz, dll.</small>
+                        <div class="table-responsive">
+                            <table class="table table-bordered bg-white align-middle text-center small mb-0">
+                                <thead class="table-warning">
+                                    <tr>
+                                        <th class="text-start">Nama Santri</th>
+                                        <th style="width: 100px;">Total Poin</th>
+                                        <th style="width: 220px;">Tambah / Kurang Poin</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for s in santri_list %}
+                                    <tr>
+                                        <td class="text-start fw-bold text-dark">{{ s.nama }}</td>
+                                        <td>
+                                            <span class="badge bg-warning text-dark fs-6" id="poin-val-{{ s.id }}">{{ s.poin_kebaikan }}</span>
+                                        </td>
+                                        <td>
+                                            <div class="btn-group btn-group-sm me-1" role="group">
+                                                <button type="button" onclick="tambahPoin({{ s.id }}, 1)" class="btn btn-outline-success fw-bold">+1</button>
+                                                <button type="button" onclick="tambahPoin({{ s.id }}, 5)" class="btn btn-outline-success fw-bold">+5</button>
+                                                <button type="button" onclick="tambahPoin({{ s.id }}, -1)" class="btn btn-outline-danger fw-bold">-1</button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                    {% else %}
+                                    <tr>
+                                        <td colspan="3" class="text-center text-muted py-2">Belum ada santri.</td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
                     <!-- Presensi Mingguan -->
                     <div class="card border-0 shadow-sm p-3 mb-4">
                         <h5 class="fw-bold text-success mb-3"><i class="bi bi-calendar-check"></i> Presensi Mingguan (Senin - Sabtu)</h5>
@@ -492,6 +544,18 @@ def admin_dashboard():
                 }
             }
 
+            async function tambahPoin(santriId, delta) {
+                const res = await fetch('/api/tambah-poin', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({santri_id: santriId, delta: delta})
+                });
+                const data = await res.json();
+                if(data.success) {
+                    document.getElementById(`poin-val-${santriId}`).innerText = data.new_poin;
+                }
+            }
+
             async function toggleAbsen(santriId, tanggal, isChecked) {
                 const status = isChecked ? 'Hadir' : 'Alfa';
                 await fetch('/api/absen', {
@@ -527,6 +591,21 @@ def admin_dashboard():
 # --------------------------------------------------
 # API ENDPOINTS
 # --------------------------------------------------
+@app.route('/api/tambah-poin', methods=['POST'])
+def api_tambah_poin():
+    data = request.json
+    santri_id = data.get('santri_id')
+    delta = data.get('delta', 0)
+    
+    santri = Santri.query.get(santri_id)
+    if santri:
+        santri.poin_kebaikan = (santri.poin_kebaikan or 0) + delta
+        if santri.poin_kebaikan < 0:
+            santri.poin_kebaikan = 0
+        db.session.commit()
+        return jsonify({'success': True, 'new_poin': santri.poin_kebaikan})
+    return jsonify({'success': False}), 404
+
 @app.route('/api/simpan-materi', methods=['POST'])
 def api_simpan_materi():
     tanggal = request.form.get('tanggal')
@@ -556,7 +635,7 @@ def api_tambah_santri():
     halaman = request.form.get('halaman')
     
     if nama and umur:
-        s = Santri(nama=nama, umur=int(umur), jenis_ngaji=jenis_ngaji, capaian=capaian, halaman=halaman)
+        s = Santri(nama=nama, umur=int(umur), jenis_ngaji=jenis_ngaji, capaian=capaian, halaman=halaman, poin_kebaikan=0)
         db.session.add(s)
         db.session.commit()
     return redirect(url_for('admin_dashboard'))
